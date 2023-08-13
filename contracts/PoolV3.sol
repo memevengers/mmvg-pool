@@ -33,6 +33,7 @@ contract IRewardDistributionRecipient is Ownable {
     external
     onlyOwner
     {
+        require(_rewardDistribution != address(0), "Invalid address: zero address provided");
         rewardDistribution = _rewardDistribution;
     }
 
@@ -51,8 +52,7 @@ contract TokenWrapper is ERC20, ERC20Detailed, Ownable {
     using SafeMath for uint256;
     using SafeERC20 for IERC20;
 
-    IERC20 public stakeToken =
-    IERC20(0xbddC276CACC18E9177B2f5CFb3BFb6eef491799b); //FIXME
+    IERC20 public stakeToken = IERC20(0xdDF688e96cB2531a69Bf6347C02f069266C1Aa81);
 
     function stake(uint256 amount) public {
         uint256 _before = stakeToken.balanceOf(address(this));
@@ -68,10 +68,14 @@ contract TokenWrapper is ERC20, ERC20Detailed, Ownable {
         stakeToken.safeTransfer(msg.sender, amount);
     }
 
-    function withdrawAccount(address account, uint256 amount) public onlyOwner {
-        _burn(account, amount);
-        stakeToken.safeTransfer(account, amount);
+    function transfer(address /*_recipient*/, uint256 /*_amount*/) public returns (bool) {
+        revert("Transfer is disabled");
     }
+
+    function transferFrom(address /*_sender*/, address /*_recipient*/, uint256 /*_amount*/) public returns (bool) {
+        revert("TransferFrom is disabled");
+    }
+
 }
 
 /**
@@ -115,7 +119,6 @@ contract PoolV3 is TokenWrapper, IRewardDistributionRecipient {
         address _stakeToken,
         address _rewardToken
     ) public ERC20Detailed(name, "POOL-V3", 18) {
-        // _name = name;
         isLocked = _isLocked;
         isWhitelisted = _isWhitelisted;
         startTime = _startTime;
@@ -123,7 +126,6 @@ contract PoolV3 is TokenWrapper, IRewardDistributionRecipient {
         limit = _limit;
         stakeToken = IERC20(_stakeToken);
         rewardToken = IERC20(_rewardToken);
-        _mint(msg.sender, 0);
     }
 
     modifier updateReward(address account) {
@@ -153,10 +155,12 @@ contract PoolV3 is TokenWrapper, IRewardDistributionRecipient {
     }
 
     function addWhitelist(address account) public onlyOwner {
+        require(account != address(0), "Invalid address: zero address provided");
         whitelist[account] = true;
     }
 
     function removeWhitelist(address account) public onlyOwner {
+        require(account != address(0), "Invalid address: zero address provided");
         whitelist[account] = false;
     }
 
@@ -236,35 +240,9 @@ contract PoolV3 is TokenWrapper, IRewardDistributionRecipient {
         emit Withdrawn(msg.sender, amount);
     }
 
-    function withdrawAccount(address account, uint256 amount)
-    public
-    checkStart
-    onlyRewardDistribution
-    updateReward(account)
-    {
-        require(amount > 0, "POOL: Cannot withdraw 0");
-        super.withdrawAccount(account, amount);
-        emit Withdrawn(account, amount);
-
-        uint256 reward = earned(account);
-        if (reward > 0) {
-            rewards[account] = 0;
-            rewardToken.safeTransfer(account, reward);
-            emit RewardPaid(account, reward);
-        }
-    }
-
-    function withdrawLeftRewards(address account, uint256 amount)
-    public
-    onlyRewardDistribution
-    {
-        require(amount > 0, "POOL: Cannot withdraw 0");
-        rewardToken.safeTransfer(account, amount);
-        emit Withdrawn(account, amount);
-    }
-
     function setLimit(uint256 amount) public onlyRewardDistribution {
         require(amount >= 0, "POOL: limit must >= 0");
+        require(amount <= 1e29, "POOL: limit must <= 1e29"); 
         limit = amount;
         emit SetLimit(msg.sender, amount);
     }
@@ -275,7 +253,7 @@ contract PoolV3 is TokenWrapper, IRewardDistributionRecipient {
     }
 
     function getReward() public checkStart isLock updateReward(msg.sender) {
-        uint256 reward = earned(msg.sender);
+        uint256 reward = rewards[msg.sender];
         if (reward > 0) {
             rewards[msg.sender] = 0;
             rewardToken.safeTransfer(msg.sender, reward);
@@ -327,19 +305,27 @@ contract PoolV3 is TokenWrapper, IRewardDistributionRecipient {
     checkOpen
     updateReward(address(0))
     {
+        require(reward > 0, "Reward must be greater than 0");
+
         if (block.timestamp > startTime) {
             if (block.timestamp >= periodFinish) {
-                uint256 period = block.timestamp.sub(startTime).div(DURATION).add(1);
+                uint256 timeDifference = block.timestamp.sub(startTime);
+                require(DURATION != 0, "Division by zero: DURATION");
+                uint256 period = timeDifference.div(DURATION).add(1);
                 periodFinish = startTime.add(period.mul(DURATION));
-                rewardRate = reward.div(periodFinish.sub(block.timestamp));
+                uint256 periodDifference = periodFinish.sub(block.timestamp);
+                require(periodDifference != 0, "Division by zero: period difference");
+                rewardRate = reward.div(periodDifference);
             } else {
                 uint256 remaining = periodFinish.sub(block.timestamp);
+                require(remaining != 0, "Division by zero: remaining time");
                 uint256 leftover = remaining.mul(rewardRate);
                 rewardRate = reward.add(leftover).div(remaining);
             }
             lastUpdateTime = block.timestamp;
         } else {
             uint256 b = rewardToken.balanceOf(address(this));
+            require(DURATION != 0, "Division by zero: DURATION");
             rewardRate = reward.add(b).div(DURATION);
             periodFinish = startTime.add(DURATION);
             lastUpdateTime = startTime;
